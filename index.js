@@ -30,7 +30,10 @@ function saveBans() {
   fs.writeFileSync(BAN_FILE, JSON.stringify([...bannedUsers]));
 }
 
-// === BOT HANDLER ===
+// === DUPLICATE MESSAGE GUARD ===
+const recentMessages = new Set();
+
+// === WEBHOOK ENTRY POINT ===
 app.get("/", (req, res) => {
   res.send("🤖 Confession Bot is running");
 });
@@ -38,12 +41,11 @@ app.get("/", (req, res) => {
 app.post("/", async (req, res) => {
   const body = req.body;
 
-  // === BUTTON CALLBACKS ===
+  // === HANDLE BUTTON CLICKS ===
   if (body.callback_query) {
     const query = body.callback_query;
     const fromAdmin = query.from.id === ADMIN_ID;
 
-    // ✅ Ban logic
     if (fromAdmin && query.data.startsWith("ban:")) {
       const [_, bannedId, bannedUsername] = query.data.split(":");
       const parsedId = parseInt(bannedId);
@@ -60,24 +62,13 @@ app.post("/", async (req, res) => {
       bannedUsers.add(parsedId);
       saveBans();
 
-      const banMessage = `👤 #BANNED_USER
-
-Bot: ${BOT_USERNAME} [ ${BOT_ID} ]
-User ID: ${bannedId}
-Name: @${bannedUsername}`;
+      const banMessage = `👤 #BANNED_USER\n\nBot: ${BOT_USERNAME} [ ${BOT_ID} ]\nUser ID: ${bannedId}\nName: @${bannedUsername}`;
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: CHANNEL_ID,
         text: banMessage,
         reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "🔓 Unban",
-                callback_data: `unban:${bannedId}`,
-              },
-            ],
-          ],
+          inline_keyboard: [[{ text: "🔓 Unban", callback_data: `unban:${bannedId}` }]],
         },
       });
 
@@ -89,7 +80,6 @@ Name: @${bannedUsername}`;
       return res.sendStatus(200);
     }
 
-    // ✅ Unban logic
     if (fromAdmin && query.data.startsWith("unban:")) {
       const [, unbanId] = query.data.split(":");
       const parsedId = parseInt(unbanId);
@@ -124,11 +114,18 @@ Name: @${bannedUsername}`;
   const msg = body.message;
   if (!msg) return res.sendStatus(200);
 
+  const msgId = msg.message_id;
   const userId = msg.from?.id;
   const username = msg.from?.username || "unknown";
+
+  // === PREVENT DUPLICATES ===
+  if (recentMessages.has(msgId)) return res.sendStatus(200);
+  recentMessages.add(msgId);
+  setTimeout(() => recentMessages.delete(msgId), 60000); // Auto-clean in 60s
+
   const text = msg.text || msg.caption || "";
 
-  // === /unban command ===
+  // === /unban <id> COMMAND ===
   if (msg.text && msg.text.startsWith("/unban") && userId === ADMIN_ID) {
     const parts = msg.text.split(" ");
     if (parts.length !== 2) {
@@ -163,7 +160,7 @@ Name: @${bannedUsername}`;
     return res.sendStatus(200);
   }
 
-  // === BLOCK BANNED USERS ===
+  // === BLOCKED USERS ===
   if (bannedUsers.has(userId)) {
     await axios.post(`${TELEGRAM_API}/sendMessage`, {
       chat_id: userId,
@@ -172,16 +169,14 @@ Name: @${bannedUsername}`;
     return res.sendStatus(200);
   }
 
-  // === TEXT ===
+  // === TEXT CONFESSION ===
   if (msg.text) {
     if (userId === ADMIN_ID) {
-      // Admin sends = post to channel only
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: CHANNEL_ID,
         text: `📩 Admin Confession:\n\n${msg.text}`,
       });
     } else {
-      // Confessor sends
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: CHANNEL_ID,
         text: `📩 New Confession:\n\n${msg.text}`,
@@ -191,14 +186,7 @@ Name: @${bannedUsername}`;
         chat_id: ADMIN_ID,
         text: `📬 Confession from @${username} (${userId}):\n\n${msg.text}`,
         reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "🚫 Ban",
-                callback_data: `ban:${userId}:${username}`,
-              },
-            ],
-          ],
+          inline_keyboard: [[{ text: "🚫 Ban", callback_data: `ban:${userId}:${username}` }]],
         },
       });
 
@@ -211,7 +199,7 @@ Name: @${bannedUsername}`;
     return res.sendStatus(200);
   }
 
-  // === PHOTO ===
+  // === PHOTO CONFESSION ===
   if (msg.photo) {
     const photo = msg.photo.at(-1).file_id;
 
@@ -233,14 +221,7 @@ Name: @${bannedUsername}`;
         photo,
         caption: `📷 Photo confession from @${username} (${userId})`,
         reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "🚫 Ban",
-                callback_data: `ban:${userId}:${username}`,
-              },
-            ],
-          ],
+          inline_keyboard: [[{ text: "🚫 Ban", callback_data: `ban:${userId}:${username}` }]],
         },
       });
     }
@@ -248,7 +229,7 @@ Name: @${bannedUsername}`;
     return res.sendStatus(200);
   }
 
-  // === DOCUMENT ===
+  // === DOCUMENT CONFESSION ===
   if (msg.document) {
     if (userId === ADMIN_ID) {
       await axios.post(`${TELEGRAM_API}/sendDocument`, {
@@ -268,14 +249,7 @@ Name: @${bannedUsername}`;
         document: msg.document.file_id,
         caption: `📁 File confession from @${username} (${userId})`,
         reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "🚫 Ban",
-                callback_data: `ban:${userId}:${username}`,
-              },
-            ],
-          ],
+          inline_keyboard: [[{ text: "🚫 Ban", callback_data: `ban:${userId}:${username}` }]],
         },
       });
     }
@@ -283,12 +257,11 @@ Name: @${bannedUsername}`;
     return res.sendStatus(200);
   }
 
-  res.sendStatus(200);
+  return res.sendStatus(200);
 });
 
-// === RUN SERVER ===
+// === START SERVER ===
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Confession Bot is running on port ${PORT}`);
+  console.log(`🚀 Confession Bot running on port ${PORT}`);
 });
-
