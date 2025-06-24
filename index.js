@@ -6,7 +6,7 @@ const fs = require("fs");
 const app = express();
 app.use(bodyParser.json());
 
-// === ENVIRONMENT VARIABLES ===
+// === ENV VARS ===
 const TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 const CHANNEL_ID = process.env.CHANNEL_ID;
@@ -14,7 +14,7 @@ const ADMIN_ID = parseInt(process.env.ADMIN_ID);
 const BOT_USERNAME = process.env.BOT_USERNAME || "@Whisperroombot";
 const BOT_ID = process.env.BOT_ID || "7141908877";
 
-// === BAN STORAGE ===
+// === BAN SYSTEM ===
 const BAN_FILE = "banned.json";
 let bannedUsers = new Set();
 
@@ -22,7 +22,7 @@ if (fs.existsSync(BAN_FILE)) {
   try {
     bannedUsers = new Set(JSON.parse(fs.readFileSync(BAN_FILE, "utf8")));
   } catch (err) {
-    console.error("❌ Failed to read banned.json:", err.message);
+    console.error("❌ Error reading banned.json:", err.message);
   }
 }
 
@@ -30,10 +30,10 @@ function saveBans() {
   fs.writeFileSync(BAN_FILE, JSON.stringify([...bannedUsers]));
 }
 
-// === DUPLICATE MESSAGE GUARD ===
+// === DUPLICATE FILTER ===
 const recentMessages = new Set();
 
-// === WEBHOOK ENTRY POINT ===
+// === WEBHOOK ===
 app.get("/", (req, res) => {
   res.send("🤖 Confession Bot is running");
 });
@@ -41,11 +41,12 @@ app.get("/", (req, res) => {
 app.post("/", async (req, res) => {
   const body = req.body;
 
-  // === HANDLE BUTTON CLICKS ===
+  // === INLINE BUTTON HANDLERS ===
   if (body.callback_query) {
     const query = body.callback_query;
     const fromAdmin = query.from.id === ADMIN_ID;
 
+    // 🔒 Ban
     if (fromAdmin && query.data.startsWith("ban:")) {
       const [_, bannedId, bannedUsername] = query.data.split(":");
       const parsedId = parseInt(bannedId);
@@ -62,13 +63,13 @@ app.post("/", async (req, res) => {
       bannedUsers.add(parsedId);
       saveBans();
 
-      const banMessage = `👤 #BANNED_USER\n\nBot: ${BOT_USERNAME} [ ${BOT_ID} ]\nUser ID: ${bannedId}\nName: @${bannedUsername}`;
-
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: CHANNEL_ID,
-        text: banMessage,
+        text: `👤 #BANNED_USER\n\nBot: ${BOT_USERNAME} [ ${BOT_ID} ]\nUser ID: ${bannedId}\nName: @${bannedUsername}`,
         reply_markup: {
-          inline_keyboard: [[{ text: "🔓 Unban", callback_data: `unban:${bannedId}` }]],
+          inline_keyboard: [
+            [{ text: "🔓 Unban", callback_data: `unban:${bannedId}` }],
+          ],
         },
       });
 
@@ -80,6 +81,7 @@ app.post("/", async (req, res) => {
       return res.sendStatus(200);
     }
 
+    // 🔓 Unban
     if (fromAdmin && query.data.startsWith("unban:")) {
       const [, unbanId] = query.data.split(":");
       const parsedId = parseInt(unbanId);
@@ -95,14 +97,14 @@ app.post("/", async (req, res) => {
       bannedUsers.delete(parsedId);
       saveBans();
 
-      await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
-        callback_query_id: query.id,
-        text: `✅ User ${parsedId} unbanned.`,
-      });
-
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: CHANNEL_ID,
         text: `🔓 #UNBANNED_USER\nUser ID: ${parsedId} has been unbanned.`,
+      });
+
+      await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+        callback_query_id: query.id,
+        text: `✅ User ${parsedId} has been unbanned.`,
       });
 
       return res.sendStatus(200);
@@ -118,16 +120,23 @@ app.post("/", async (req, res) => {
   const userId = msg.from?.id;
   const username = msg.from?.username || "unknown";
 
-  // === PREVENT DUPLICATES ===
+  // 🚫 Duplicate check
   if (recentMessages.has(msgId)) return res.sendStatus(200);
   recentMessages.add(msgId);
-  setTimeout(() => recentMessages.delete(msgId), 60000); // Auto-clean in 60s
+  setTimeout(() => recentMessages.delete(msgId), 60000);
 
-  const text = msg.text || msg.caption || "";
+  // 🚫 Ban check
+  if (bannedUsers.has(userId)) {
+    await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      chat_id: userId,
+      text: "🚫 You are banned from sending confessions.",
+    });
+    return res.sendStatus(200);
+  }
 
-  // === /unban <id> COMMAND ===
-  if (msg.text && msg.text.startsWith("/unban") && userId === ADMIN_ID) {
-    const parts = msg.text.split(" ");
+  // 📤 /unban command
+  if (msg.text?.startsWith("/unban") && userId === ADMIN_ID) {
+    const parts = msg.text.trim().split(" ");
     if (parts.length !== 2) {
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: ADMIN_ID,
@@ -142,13 +151,13 @@ app.post("/", async (req, res) => {
       saveBans();
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: ADMIN_ID,
-        text: `✅ User ${unbanId} has been unbanned.`,
+        chat_id: CHANNEL_ID,
+        text: `🔓 #UNBANNED_USER\nUser ID: ${unbanId} has been unbanned.`,
       });
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: CHANNEL_ID,
-        text: `🔓 #UNBANNED_USER\nUser ID: ${unbanId} has been unbanned.`,
+        chat_id: ADMIN_ID,
+        text: `✅ User ${unbanId} has been unbanned.`,
       });
     } else {
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
@@ -160,28 +169,17 @@ app.post("/", async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // === BLOCKED USERS ===
-  if (bannedUsers.has(userId)) {
+  // 💬 TEXT only
+  const isText = !!msg.text && !msg.photo && !msg.document;
+  if (isText) {
+    const confession = `📩 ${userId === ADMIN_ID ? "Admin Confession" : "New Confession"}:\n\n${msg.text}`;
+
     await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: userId,
-      text: "🚫 You are banned from sending confessions.",
+      chat_id: CHANNEL_ID,
+      text: confession,
     });
-    return res.sendStatus(200);
-  }
 
-  // === TEXT CONFESSION ===
-  if (msg.text) {
-    if (userId === ADMIN_ID) {
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: CHANNEL_ID,
-        text: `📩 Admin Confession:\n\n${msg.text}`,
-      });
-    } else {
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: CHANNEL_ID,
-        text: `📩 New Confession:\n\n${msg.text}`,
-      });
-
+    if (userId !== ADMIN_ID) {
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: ADMIN_ID,
         text: `📬 Confession from @${username} (${userId}):\n\n${msg.text}`,
@@ -199,58 +197,58 @@ app.post("/", async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // === PHOTO CONFESSION ===
+  // 📷 PHOTO only
   if (msg.photo) {
-    const photo = msg.photo.at(-1).file_id;
+    const file_id = msg.photo.at(-1).file_id;
 
-    if (userId === ADMIN_ID) {
-      await axios.post(`${TELEGRAM_API}/sendPhoto`, {
-        chat_id: CHANNEL_ID,
-        photo,
-        caption: msg.caption || "📷 Admin photo confession",
-      });
-    } else {
-      await axios.post(`${TELEGRAM_API}/sendPhoto`, {
-        chat_id: CHANNEL_ID,
-        photo,
-        caption: msg.caption || "",
-      });
+    await axios.post(`${TELEGRAM_API}/sendPhoto`, {
+      chat_id: CHANNEL_ID,
+      photo: file_id,
+      caption: msg.caption || "📷 Photo confession",
+    });
 
+    if (userId !== ADMIN_ID) {
       await axios.post(`${TELEGRAM_API}/sendPhoto`, {
         chat_id: ADMIN_ID,
-        photo,
-        caption: `📷 Photo confession from @${username} (${userId})`,
+        photo: file_id,
+        caption: `📷 Confession from @${username} (${userId})`,
         reply_markup: {
           inline_keyboard: [[{ text: "🚫 Ban", callback_data: `ban:${userId}:${username}` }]],
         },
+      });
+
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: userId,
+        text: "✅ Your confession has been sent anonymously.",
       });
     }
 
     return res.sendStatus(200);
   }
 
-  // === DOCUMENT CONFESSION ===
+  // 📎 DOCUMENT only
   if (msg.document) {
-    if (userId === ADMIN_ID) {
-      await axios.post(`${TELEGRAM_API}/sendDocument`, {
-        chat_id: CHANNEL_ID,
-        document: msg.document.file_id,
-        caption: msg.caption || "📁 Admin file confession",
-      });
-    } else {
-      await axios.post(`${TELEGRAM_API}/sendDocument`, {
-        chat_id: CHANNEL_ID,
-        document: msg.document.file_id,
-        caption: msg.caption || "",
-      });
+    const file_id = msg.document.file_id;
 
+    await axios.post(`${TELEGRAM_API}/sendDocument`, {
+      chat_id: CHANNEL_ID,
+      document: file_id,
+      caption: msg.caption || "📁 File confession",
+    });
+
+    if (userId !== ADMIN_ID) {
       await axios.post(`${TELEGRAM_API}/sendDocument`, {
         chat_id: ADMIN_ID,
-        document: msg.document.file_id,
-        caption: `📁 File confession from @${username} (${userId})`,
+        document: file_id,
+        caption: `📁 Confession from @${username} (${userId})`,
         reply_markup: {
           inline_keyboard: [[{ text: "🚫 Ban", callback_data: `ban:${userId}:${username}` }]],
         },
+      });
+
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: userId,
+        text: "✅ Your confession has been sent anonymously.",
       });
     }
 
@@ -260,7 +258,7 @@ app.post("/", async (req, res) => {
   return res.sendStatus(200);
 });
 
-// === START SERVER ===
+// 🚀 LAUNCH
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Confession Bot running on port ${PORT}`);
