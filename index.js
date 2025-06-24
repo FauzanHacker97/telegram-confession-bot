@@ -129,7 +129,7 @@ Name: @${bannedUsername}`;
   const text = msg.text || msg.caption || "";
 
   // === /unban command ===
-  if (msg.text && msg.text.startsWith("/unban") && msg.from.id === ADMIN_ID) {
+  if (msg.text && msg.text.startsWith("/unban") && userId === ADMIN_ID) {
     const parts = msg.text.split(" ");
     if (parts.length !== 2) {
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
@@ -172,14 +172,21 @@ Name: @${bannedUsername}`;
     return res.sendStatus(200);
   }
 
-  // === CONFESSION: TEXT ===
+  // === TEXT ===
   if (msg.text) {
-    await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: CHANNEL_ID,
-      text: `${msg.text}`,
-    });
+    if (userId === ADMIN_ID) {
+      // Admin sends = post to channel only
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: CHANNEL_ID,
+        text: `📩 Admin Confession:\n\n${msg.text}`,
+      });
+    } else {
+      // Confessor sends
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: CHANNEL_ID,
+        text: `📩 New Confession:\n\n${msg.text}`,
+      });
 
-    if (userId !== ADMIN_ID) {
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: ADMIN_ID,
         text: `📬 Confession from @${username} (${userId}):\n\n${msg.text}`,
@@ -194,27 +201,33 @@ Name: @${bannedUsername}`;
           ],
         },
       });
-    }
 
-    await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: userId,
-      text: "✅ Your confession has been sent anonymously.",
-    });
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: userId,
+        text: "✅ Your confession has been sent anonymously.",
+      });
+    }
 
     return res.sendStatus(200);
   }
 
-  // === CONFESSION: PHOTO ===
+  // === PHOTO ===
   if (msg.photo) {
     const photo = msg.photo.at(-1).file_id;
 
-    await axios.post(`${TELEGRAM_API}/sendPhoto`, {
-      chat_id: CHANNEL_ID,
-      photo,
-      caption: msg.caption || "",
-    });
+    if (userId === ADMIN_ID) {
+      await axios.post(`${TELEGRAM_API}/sendPhoto`, {
+        chat_id: CHANNEL_ID,
+        photo,
+        caption: msg.caption || "📷 Admin photo confession",
+      });
+    } else {
+      await axios.post(`${TELEGRAM_API}/sendPhoto`, {
+        chat_id: CHANNEL_ID,
+        photo,
+        caption: msg.caption || "",
+      });
 
-    if (userId !== ADMIN_ID) {
       await axios.post(`${TELEGRAM_API}/sendPhoto`, {
         chat_id: ADMIN_ID,
         photo,
@@ -235,15 +248,21 @@ Name: @${bannedUsername}`;
     return res.sendStatus(200);
   }
 
-  // === CONFESSION: DOCUMENT ===
+  // === DOCUMENT ===
   if (msg.document) {
-    await axios.post(`${TELEGRAM_API}/sendDocument`, {
-      chat_id: CHANNEL_ID,
-      document: msg.document.file_id,
-      caption: msg.caption || "",
-    });
+    if (userId === ADMIN_ID) {
+      await axios.post(`${TELEGRAM_API}/sendDocument`, {
+        chat_id: CHANNEL_ID,
+        document: msg.document.file_id,
+        caption: msg.caption || "📁 Admin file confession",
+      });
+    } else {
+      await axios.post(`${TELEGRAM_API}/sendDocument`, {
+        chat_id: CHANNEL_ID,
+        document: msg.document.file_id,
+        caption: msg.caption || "",
+      });
 
-    if (userId !== ADMIN_ID) {
       await axios.post(`${TELEGRAM_API}/sendDocument`, {
         chat_id: ADMIN_ID,
         document: msg.document.file_id,
