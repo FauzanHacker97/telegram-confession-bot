@@ -114,7 +114,7 @@ app.post("/", async (req, res) => {
   }
 
   const msg = body.message;
-  if (!msg) return res.sendStatus(200);
+  if (!msg || msg.from?.is_bot) return res.sendStatus(200);
 
   const msgId = msg.message_id;
   const userId = msg.from?.id;
